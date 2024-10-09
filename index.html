@@ -1,0 +1,457 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Three.js Scene with Littlest Tokyo, Water, Console, Sun, and Boat</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+            background-color: black;
+        }
+        canvas {
+            display: block;
+        }
+        #blocker {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            z-index: 10;
+        }
+        #instructions {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            color: white;
+            font-size: 18px;
+        }
+        #console {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 40px;
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            display: none;
+            font-size: 16px;
+            padding: 10px;
+            box-sizing: border-box;
+        }
+        #consoleInput {
+            width: 100%;
+            background: none;
+            border: none;
+            color: white;
+            outline: none;
+            font-size: 16px;
+        }
+    </style>
+</head>
+<body>
+
+<div id="blocker">
+    Click to Play (Pointer will lock on screen)
+</div>
+
+<div id="instructions">Use WASD to move, Space to jump, E to ride the boat.</div>
+
+<!-- Console Input -->
+<div id="console">
+    <input type="text" id="consoleInput" placeholder="Enter command...">
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/objects/Water.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/DRACOLoader.js"></script>
+
+<script>
+    let scene, camera, renderer, playerPosition, water, particleMaterial, particleSystem, sun, boat;
+    let yaw = 0, pitch = 0, velocity = new THREE.Vector3();
+    const playerSpeed = 2, gravity = 0.005, jumpSpeed = 0.15;
+    let isJumping = false, keyState = {}, isRidingBoat = false;
+    const particleCount = 100000; // Number of snow particles
+    const snowSpeed = 50;  // Speed at which the snow falls
+
+    let consoleVisible = false;
+    let brickMaterial;
+    const wallColliders = [];
+    const mixers = [];  // Store animation mixers
+
+    const clock = new THREE.Clock(); // Clock to calculate delta time
+
+    init();
+    loadMultipleLittlestTokyo();
+    loadSakuraTrees();
+    loadBoat();  // Load the boat
+    animate();
+
+    function init() {
+        scene = new THREE.Scene();
+        camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        playerPosition = new THREE.Vector3(0, 3.5, 0);
+
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        const ambientLight = new THREE.AmbientLight(0x404040, 3);
+        scene.add(ambientLight);
+
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+        directionalLight.position.set(5, 10, 7.5);
+        scene.add(directionalLight);
+
+        // Load the brick texture for the walls
+        const brickTexture = new THREE.TextureLoader().load('https://threejs.org/examples/textures/brick_diffuse.jpg');
+        brickTexture.wrapS = brickTexture.wrapT = THREE.RepeatWrapping;
+        brickTexture.repeat.set(20, 2); // Adjust the repeat so the texture looks more realistic
+        brickMaterial = new THREE.MeshStandardMaterial({ map: brickTexture });
+
+        // Add Water
+        const waterGeometry = new THREE.PlaneGeometry(10000, 10000);
+        const waterNormals = new THREE.TextureLoader().load('https://threejs.org/examples/textures/waternormals.jpg');
+        waterNormals.wrapS = waterNormals.wrapT = THREE.RepeatWrapping;
+
+        water = new THREE.Water(waterGeometry, {
+            textureWidth: 512,
+            textureHeight: 512,
+            waterNormals: waterNormals,
+            alpha: 1.0,
+            sunDirection: directionalLight.position.clone().normalize(),
+            sunColor: 0xffffff,
+            waterColor: 0x001e0f,
+            distortionScale: 3.7,
+            fog: scene.fog !== undefined
+        });
+
+        water.rotation.x = -Math.PI / 2;
+        water.position.y = 0;
+        scene.add(water);
+
+        // Add brick walls around the water
+        addBrickWalls();
+
+        // Add Snowflakes
+        const textureLoader = new THREE.TextureLoader();
+        const snowflakeTexture = textureLoader.load('https://threejs.org/examples/textures/sprites/snowflake1.png');
+
+        particleMaterial = new THREE.PointsMaterial({
+            size: 0.7,
+            map: snowflakeTexture,
+            blending: THREE.AdditiveBlending,
+            depthTest: false,
+            transparent: true
+        });
+
+        const particlesGeometry = new THREE.BufferGeometry();
+        const positions = new Float32Array(particleCount * 3);
+
+        for (let i = 0; i < particleCount; i++) {
+            positions[i * 3] = Math.random() * 1000 - 500;
+            positions[i * 3 + 1] = Math.random() * 1000;
+            positions[i * 3 + 2] = Math.random() * 1000 - 500;
+        }
+
+        particlesGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        particleSystem = new THREE.Points(particlesGeometry, particleMaterial);
+        scene.add(particleSystem);
+
+        setupPointerLock();
+
+        window.addEventListener('keydown', (event) => {
+            if (event.key === 'Tab') {
+                event.preventDefault(); // Prevent default tab behavior
+                toggleConsole();
+            } else if (!consoleVisible) {
+                keyState[event.key] = true;
+                if (event.key === ' ' && !isJumping && !isRidingBoat) {
+                    jump();
+                }
+                if (event.key === 'e' && boat && !isRidingBoat) {
+                    rideBoat();
+                }
+            }
+        });
+        window.addEventListener('keyup', (event) => {
+            if (!consoleVisible) {
+                keyState[event.key] = false;
+            }
+        });
+        window.addEventListener('resize', onWindowResize, false);
+
+        setupConsoleInput();
+    }
+
+    function addBrickWalls() {
+        // Define the dimensions of the wall
+        const wallHeight = 5;
+        const wallThickness = 10;
+        const waterSize = 10000; // The size of your water plane
+
+        // Front wall
+        const frontWall = createWall(waterSize, wallHeight);
+        frontWall.position.set(0, wallHeight / 2, waterSize / 2);
+        scene.add(frontWall);
+        wallColliders.push(frontWall);
+
+        // Back wall
+        const backWall = createWall(waterSize, wallHeight);
+        backWall.position.set(0, wallHeight / 2, -waterSize / 2);
+        scene.add(backWall);
+        wallColliders.push(backWall);
+
+        // Left wall
+        const leftWall = createWall(wallThickness, wallHeight, waterSize);
+        leftWall.position.set(-waterSize / 2, wallHeight / 2, 0);
+        scene.add(leftWall);
+        wallColliders.push(leftWall);
+
+        // Right wall
+        const rightWall = createWall(wallThickness, wallHeight, waterSize);
+        rightWall.position.set(waterSize / 2, wallHeight / 2, 0);
+        scene.add(rightWall);
+        wallColliders.push(rightWall);
+    }
+
+    function createWall(width, height, depth = 10) {
+        const wallGeometry = new THREE.BoxGeometry(width, height, depth);
+        const wall = new THREE.Mesh(wallGeometry, brickMaterial);
+        wall.geometry.computeBoundingBox(); // Prepare the bounding box for collision detection
+        return wall;
+    }
+
+    function checkCollision() {
+        // Simple AABB collision detection
+        const playerBox = new THREE.Box3().setFromCenterAndSize(playerPosition, new THREE.Vector3(2, 2, 2));
+
+        for (let i = 0; i < wallColliders.length; i++) {
+            const wallBox = new THREE.Box3().setFromObject(wallColliders[i]);
+
+            if (playerBox.intersectsBox(wallBox)) {
+                return true; // Collision detected
+            }
+        }
+        return false;
+    }
+
+    function toggleConsole() {
+        const consoleElement = document.getElementById('console');
+        if (consoleVisible) {
+            consoleElement.style.display = 'none';
+            consoleVisible = false;
+            document.body.requestPointerLock();
+        } else {
+            consoleElement.style.display = 'block';
+            consoleVisible = true;
+            document.exitPointerLock();
+            document.getElementById('consoleInput').focus();
+        }
+    }
+
+    function setupConsoleInput() {
+        const consoleInput = document.getElementById('consoleInput');
+        consoleInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                const command = consoleInput.value;
+                handleConsoleCommand(command);
+                consoleInput.value = '';
+            }
+        });
+    }
+
+    function handleConsoleCommand(command) {
+        if (command.startsWith('change_sky:')) {
+            const color = command.split(':')[1].trim();
+            scene.background = new THREE.Color(color);
+        } else if (command === 'add_sun') {
+            if (!sun) {
+                const sunGeometry = new THREE.SphereGeometry(10, 32, 32);
+                const sunMaterial = new THREE.MeshStandardMaterial({
+                    color: 0xffff00,
+                    emissive: 0xffff00,
+                    emissiveIntensity: 3.5
+                });
+                sun = new THREE.Mesh(sunGeometry, sunMaterial);
+                sun.position.set(0, 100, 0);  // Position sun above
+                scene.add(sun);
+            }
+        } else {
+            console.log('Unknown command:', command);
+        }
+    }
+
+    function loadMultipleLittlestTokyo() {
+        const loader = new THREE.GLTFLoader();
+        const dracoLoader = new THREE.DRACOLoader();
+        dracoLoader.setDecoderPath('https://www.gstatic.com/draco/v1/decoders/');
+        loader.setDRACOLoader(dracoLoader);
+
+        loader.load('https://threejs.org/examples/models/gltf/LittlestTokyo.glb', function (gltf) {
+            const littlestTokyo = gltf.scene;
+            littlestTokyo.scale.set(0.1, 0.1, 0.1);
+
+            const positions = [
+                { x: 20, y: 20, z: -50 },
+                { x: 100, y: 20, z: -150 },
+                { x: -100, y: 20, z: -200 },
+                { x: 200, y: 20, z: -300 },
+                { x: -200, y: 20, z: -400 },
+            ];
+
+            positions.forEach(pos => {
+                const littlestTokyoClone = littlestTokyo.clone();
+                littlestTokyoClone.position.set(pos.x, pos.y, pos.z);
+                scene.add(littlestTokyoClone);
+
+                // Create and add mixer for animations
+                const mixer = new THREE.AnimationMixer(littlestTokyoClone);
+                mixers.push(mixer);
+
+                // Play all available animations
+                gltf.animations.forEach(animation => {
+                    mixer.clipAction(animation).play();
+                });
+            });
+        });
+    }
+
+    function loadSakuraTrees() {
+        const loader = new THREE.GLTFLoader();
+        loader.load('https://threejs.org/examples/models/gltf/Tree.glb', function (gltf) {
+            const sakuraTree = gltf.scene;
+            sakuraTree.scale.set(5, 5, 5);
+
+            for (let i = 0; i < 100; i++) {
+                const sakuraClone = sakuraTree.clone();
+                sakuraClone.position.set(
+                    Math.random() * 600 - 300,
+                    0,
+                    Math.random() * 600 - 300
+                );
+                scene.add(sakuraClone);
+            }
+        });
+    }
+
+    function loadBoat() {
+        const loader = new THREE.GLTFLoader();
+        loader.load('https://threejs.org/examples/models/gltf/Boat.glb', function (gltf) {
+            boat = gltf.scene;
+            boat.scale.set(0.5, 0.5, 0.5);
+            boat.position.set(0, 0, -50);  // Position the boat near the water
+            scene.add(boat);
+        });
+    }
+
+    function rideBoat() {
+        // Attach camera to boat
+        isRidingBoat = true;
+        playerPosition.copy(boat.position);
+    }
+
+    function setupPointerLock() {
+        const blocker = document.getElementById('blocker');
+        blocker.addEventListener('click', () => {
+            blocker.style.display = 'none';
+            document.body.requestPointerLock();
+        });
+
+        document.addEventListener('pointerlockchange', () => {
+            if (document.pointerLockElement === document.body) {
+                document.addEventListener('mousemove', onMouseMove, false);
+            } else {
+                blocker.style.display = 'flex';
+                document.removeEventListener('mousemove', onMouseMove, false);
+            }
+        });
+    }
+
+    function jump() {
+        if (!isJumping) {
+            velocity.y = jumpSpeed;
+            isJumping = true;
+        }
+    }
+
+    function animate() {
+        requestAnimationFrame(animate);
+
+        const delta = clock.getDelta(); // Correctly calculate delta time between frames
+
+        velocity.y -= gravity;
+        playerPosition.y += velocity.y;
+
+        if (playerPosition.y < 3.5) {
+            playerPosition.y = 3.5;
+            isJumping = false;
+            velocity.y = 0;
+        }
+
+        // Handle player movement
+        let moveDirection = new THREE.Vector3();
+        if (keyState['w']) moveDirection.z -= playerSpeed;
+        if (keyState['s']) moveDirection.z += playerSpeed;
+        if (keyState['a']) moveDirection.x -= playerSpeed;
+        if (keyState['d']) moveDirection.x += playerSpeed;
+
+        moveDirection.applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+        playerPosition.add(moveDirection);
+
+        if (checkCollision()) {
+            // If a collision is detected, undo the last move
+            playerPosition.sub(moveDirection);
+        }
+
+        camera.position.copy(playerPosition);
+        camera.rotation.set(pitch, yaw, 0);
+
+        // Animate water
+        water.material.uniforms['time'].value += delta;
+
+        // Update all animation mixers
+        mixers.forEach(mixer => {
+            mixer.update(delta);
+        });
+
+        // Update snow particles
+        const positions = particleSystem.geometry.attributes.position.array;
+        for (let i = 0; i < particleCount; i++) {
+            positions[i * 3 + 1] -= delta * snowSpeed; // Move snow particles downwards
+            if (positions[i * 3 + 1] < -250) {
+                positions[i * 3 + 1] = 250; // Reset snow particle position when it falls below a threshold
+            }
+        }
+        particleSystem.geometry.attributes.position.needsUpdate = true; // Mark position attribute for update
+
+        renderer.render(scene, camera);
+    }
+
+    function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+
+    function onMouseMove(event) {
+        const movementX = event.movementX || 0;
+        const movementY = event.movementY || 0;
+
+        yaw -= movementX * 0.002;
+        pitch -= movementY * 0.002;
+        pitch = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, pitch));
+    }
+</script>
+
+</body>
+</html>
