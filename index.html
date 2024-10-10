@@ -51,7 +51,7 @@
             width: 100%;
             background: none;
             border: none;
-            color: white;
+            color: green;
             outline: none;
             font-size: 16px;
         }
@@ -63,7 +63,7 @@
     Click to Play (Pointer will lock on screen)
 </div>
 
-<div id="instructions">Use WASD to move, Space to jump, E to ride the boat.</div>
+<div id="instructions">Use WASD to move. Tab console command "change_sky: / add_sun"</div>
 
 <!-- Console Input -->
 <div id="console">
@@ -147,15 +147,18 @@
         const snowflakeTexture = textureLoader.load('https://threejs.org/examples/textures/sprites/snowflake1.png');
 
         particleMaterial = new THREE.PointsMaterial({
-            size: 0.7,
+            size: 0.5,
             map: snowflakeTexture,
             blending: THREE.AdditiveBlending,
             depthTest: false,
             transparent: true
+
         });
 
         const particlesGeometry = new THREE.BufferGeometry();
         const positions = new Float32Array(particleCount * 3);
+        const velocities = new Float32Array(particleCount * 3);
+
 
         for (let i = 0; i < particleCount; i++) {
             positions[i * 3] = Math.random() * 1000 - 500;
